@@ -30,17 +30,19 @@
   <div class="abstract">
     <span class="label">Abstract</span>
     <p>
-      Some published pages get far fewer clicks than similar pages sitting in a similar spot, and
-      figuring out which ones deserve a look first is mostly guesswork today. I built a Random
-      Forest that predicts a page's click-through rate from its search position, traffic, and
-      on-page engagement, then tested it the way it actually has to work: on clients it had never
-      seen during training. On those held-out clients, a simple average-by-position-and-content-type
-      rule, the kind of thing that looks perfectly reasonable in a spreadsheet, does worse than just
-      guessing the average, while the trained model explains roughly 15% more of the variance in
-      CTR. I turned that model into a 200-page review queue with a plain-language reason attached to
-      every page, not just a score. This is decision support for a human editor, not an automated
-      fix, and it says nothing about rankings, conversions, or revenue, only about which pages are
-      worth a look first.
+      FlyRank runs content as infrastructure: it researches, writes, and publishes pages into a
+      client's site, then watches the search data and optimizes, mostly without a person doing each
+      step by hand, and one open question in that loop is which already-published pages are quietly
+      losing clicks they should be getting. I looked at one month of FlyRank's production search
+      data, 100,702 pages across 44 clients, to test whether a trained model could answer that
+      better than the kind of hand-written flag FlyRank already runs in production today. I built a
+      Random Forest that predicts a page's click-through rate from its position, traffic, and
+      on-page engagement, then evaluated it the way it actually has to work: on clients it never saw
+      during training. On those held-out clients, a rule built the same way FlyRank's own flags are
+      (thresholds on position and content type) does worse than just guessing the average, while the
+      trained model explains roughly 15% more of the variance in CTR. The result is a 200-page
+      review queue with a plain-language reason attached to every page, meant as a starting point
+      for a human editor, not an automated fix.
     </p>
   </div>
 
@@ -49,15 +51,21 @@
     <p>
       Here's the actual decision this is for: an editor or SEO strategist starts the month with
       hundreds or thousands of published pages and needs to pick a handful to review before doing
-      anything else. FlyRank's tools already flag pages that look off, but "looks off" and "worth a
-      person's time this month" aren't the same question, and I wanted to see how far real data
-      could get toward telling them apart.
+      anything else. Content that ranks in search quietly decays over time, rankings slip, clicks
+      drop, and most teams notice too late. FlyRank already helps with this today through
+      hand-written flags: a health score, quick-win tags, needs-attention labels, if-this-then-that
+      thresholds that work well enough to run in production. But rules like that run out of road
+      once the underlying signals get numerous, tangled, and prone to shifting under a client's
+      feet, and nobody had yet swapped in a trained model to see if it actually does better once you
+      check.
     </p>
     <p>
-      I picked one lane on purpose: pages that already rank somewhere visible but pull in fewer
-      clicks than similar pages get. Not rankings, not conversions, not traffic overall. Just the
-      click-through rate gap, and whether a model can spot it more honestly than the simple rules
-      teams already use.
+      That's the gap this project sits in. I picked one narrow slice of it on purpose: not overall
+      page health, not rankings, just the click-through rate gap between a page and its closest
+      peers, and whether a model can spot that gap more honestly than a hand-written rule does. To
+      make it a fair fight rather than an assumed win, I built my own version of that kind of rule
+      (an average CTR by position and content type, the same flavor of logic behind FlyRank's
+      existing flags) as the baseline to beat.
     </p>
   </section>
 
