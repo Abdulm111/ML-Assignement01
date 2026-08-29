@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Which Pages Are Losing Clicks They Should Be Getting? A CTR Opportunity Model</title>
+<meta name="description" content="A validated Random Forest model for finding which published pages are underperforming on click-through rate, tested on clients it never saw during training, built on FlyRank production search data.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="toc">
+  <a href="#introduction">Introduction</a>
+  <a href="#data">Data</a>
+  <a href="#methodology">Methodology</a>
+  <a href="#results">Results</a>
+  <a href="#limitations">Limitations</a>
+  <a href="#recommendations">Recommendations</a>
+  <a href="#reproducibility">Reproducibility</a>
+  <a href="#acknowledgments">Data credit</a>
+</nav>
+
+<main>
+
+  <header class="title-block">
+    <h1>Which of Your Pages Are Losing Clicks They Should Be Getting?</h1>
+    <p class="byline">A validated CTR opportunity model, built on FlyRank production search data &middot; Abdul Musavir &middot; 2026</p>
+  </header>
+
+  <div class="abstract">
+    <span class="label">Abstract</span>
+    <p>
+      Some published pages get far fewer clicks than similar pages sitting in a similar spot, and
+      figuring out which ones deserve a look first is mostly guesswork today. I built a Random
+      Forest that predicts a page's click-through rate from its search position, traffic, and
+      on-page engagement, then tested it the way it actually has to work: on clients it had never
+      seen during training. On those held-out clients, a simple average-by-position-and-content-type
+      rule, the kind of thing that looks perfectly reasonable in a spreadsheet, does worse than just
+      guessing the average, while the trained model explains roughly 15% more of the variance in
+      CTR. I turned that model into a 200-page review queue with a plain-language reason attached to
+      every page, not just a score. This is decision support for a human editor, not an automated
+      fix, and it says nothing about rankings, conversions, or revenue, only about which pages are
+      worth a look first.
+    </p>
+  </div>
+
+  <section id="introduction">
+    <h2>Introduction</h2>
+    <p>
+      Here's the actual decision this is for: an editor or SEO strategist starts the month with
+      hundreds or thousands of published pages and needs to pick a handful to review before doing
+      anything else. FlyRank's tools already flag pages that look off, but "looks off" and "worth a
+      person's time this month" aren't the same question, and I wanted to see how far real data
+      could get toward telling them apart.
+    </p>
+    <p>
+      I picked one lane on purpose: pages that already rank somewhere visible but pull in fewer
+      clicks than similar pages get. Not rankings, not conversions, not traffic overall. Just the
+      click-through rate gap, and whether a model can spot it more honestly than the simple rules
+      teams already use.
+    </p>
+  </section>
+
+  <section id="data">
+    <h2>Data</h2>
+    <p>
+      Everything here comes from the FlyRank internship warehouse on Hugging Face, which the
+      program describes as roughly 79 million rows of real production search performance data
+      spanning many months and clients. I didn't touch anywhere near that much of it. My analysis
+      lives inside a single month, March 2026, queried directly off the parquet files.
+    </p>
+    <p>
+      Two tables did the actual work. <code>fact_content_daily_performance</code> gave me daily
+      impressions, clicks, average search position, and a handful of Google Analytics engagement
+      fields, partitioned by month. <code>dim_content</code> gave me content type, publish status,
+      and, later, for the recommendations, content age and last-updated dates.
+    </p>
+    <p>
+      I rolled the daily rows up to one row per page per month, kept only published, non-deleted
+      pages, and applied two filters that matter: at least 100 impressions that month, and an
+      average position of 1 or higher (about 0.7% of rows had a physically impossible position under
+      1, which I dropped rather than tried to explain). That left <strong>100,702 pages across 44
+      clients</strong>. FlyRank has 104 clients on file. Only 55 show any activity in March at all,
+      and of those, 44 survive the filters above.
+    </p>
+    <p>
+      One month I never touched: June 2026 is the program's sealed evaluation file, and it stayed
+      sealed through this entire project. No client names, raw URLs, or search queries appear
+      anywhere in this write-up or the underlying notebooks, only pseudonymous IDs used strictly for
+      grouping.
+    </p>
+  </section>
+
+  <section id="methodology">
+    <h2>Methodology</h2>
+    <p>
+      The target is click-through rate: clicks divided by impressions, a plain fraction, nothing
+      clipped or rescaled.
+    </p>
+    <p>
+      Two baselines exist before any modeling starts, and both stay frozen once the model shows up,
+      meaning they're computed once on the full panel and never refit per split. The first is
+      dead simple: average CTR for a page's position tier (top 3, page 1, striking distance, page 3
+      to 5, or deeper). The second is a rule from earlier in the project: average CTR for a page's
+      position tier crossed with its content type, falling back to the tier-only number whenever a
+      tier and content-type combination has fewer than 30 pages behind it.
+    </p>
+    <p>
+      The model is a Random Forest predicting CTR from average position, impressions, three GA4
+      engagement fields, a flag for whether GA4 data existed at all that month, and content type. I
+      tried a shallow decision tree first, deliberately, and only kept the forest because it beat the
+      tree by more than a token amount, 4.2 points of variance explained, not a rounding error.
+    </p>
+    <p>
+      The part I'd actually stand behind under questioning is the validation split. Rows are
+      grouped by client, not shuffled randomly, because a page's client tells you a lot that has
+      nothing to do with the features being used: brand strength, editorial habits, template choices.
+      A random split would let a model quietly learn client identity through the back door. I didn't
+      just assume this mattered, I checked it: training the identical model on a plain random 80/20
+      split versus a client-grouped 80/20 split, everything else held constant, meaningfully changed
+      the honest error (see the chart below). Forty of forty-four clients showed up on both sides of
+      the naive split. That's not a subtle leak.
+    </p>
+    <p>
+      Before trusting any of the seven features, I ran a leakage hunt on the actual pipeline: adding
+      clicks (the thing CTR is literally computed from) back into the feature set sent R-squared
+      from about 0.15 to 0.97 almost immediately, which is exactly what should happen if the check is
+      working. None of the real features behave anything like that. The single strongest real
+      feature, GA4 engaged sessions, was checked separately to confirm it isn't secretly built from
+      the same click data as the label. It isn't: different source, same-day on-page behavior,
+      correlated with CTR because both reflect page quality, not because one causes the other.
+    </p>
+  </section>
+
+  <section id="results">
+    <h2>Results</h2>
+    <p>
+      On pages from nine clients the model never saw during training, here's what four methods
+      manage on the exact same held-out rows:
+    </p>
+    <table>
+      <thead>
+        <tr><th>Model</th><th>R&sup2; (held-out clients)</th><th>Mean absolute error</th><th>% variance reduction vs. tier baseline</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Tier-only baseline</td><td>&minus;0.007</td><td>0.0036</td><td>0.0%</td></tr>
+        <tr><td>Week-4 rule (tier &times; content type)</td><td>&minus;0.008</td><td>0.0036</td><td>&minus;0.13%</td></tr>
+        <tr><td>Decision Tree (depth 4)</td><td>0.104</td><td>0.0033</td><td>11.0%</td></tr>
+        <tr class="highlight"><td>Random Forest (300 trees)</td><td>0.146</td><td>0.0032</td><td>15.2%</td></tr>
+      </tbody>
+    </table>
+
+    <figure>
+      <img src="figures/hero_r2.png" alt="Bar chart showing tier baseline and Week-4 rule with negative R-squared, decision tree and random forest with positive R-squared, on held-out clients">
+      <figcaption><strong>Takeaway:</strong> both baselines land below zero on clients they've never priced in, worse than guessing the average. Both learned models don't.</figcaption>
+    </figure>
+
+    <p>
+      The negative baseline numbers are the finding I keep coming back to. A rule that looked
+      completely reasonable when I built it earlier (average CTR by position tier and content type)
+      actively hurts you on a brand-new client. Part of the reason: content type turns out to be
+      almost a stand-in for which client you're looking at. 98% of the whole panel is one content
+      type, and the typical client publishes exactly one type, full stop. A rule built on content
+      type is quietly leaning on client identity, which is exactly the thing it can't see on a
+      genuinely new client.
+    </p>
+
+    <figure>
+      <img src="figures/split_comparison.png" alt="Bar chart comparing R-squared under a naive random split versus a client-grouped split, same model">
+      <figcaption><strong>Takeaway:</strong> the same model looks better under a naive random split, because 40 of 44 clients had rows on both sides of it. That's leakage, not skill.</figcaption>
+    </figure>
+
+    <p>
+      I also checked whether the model's "review this first" ranking actually differs from the old
+      rule's, since that's the real decision this feeds. Comparing the top 20 flagged pages from each
+      method on the same held-out rows, 12 overlap and 8 don't (a Spearman rank correlation of 0.89
+      across the full eligible queue). A model can look fine on R-squared and still point a person at
+      a meaningfully different set of pages than the old rule would have.
+    </p>
+  </section>
+
+  <section id="limitations">
+    <h2>Limitations</h2>
+    <p>
+      This says something about CTR and nothing about rankings, conversions, or revenue. It's a
+      single month, so I have no evidence it holds up in a different season, or after a search
+      algorithm update changes the landscape underneath everyone. It only covers clients and content
+      types the model actually saw, and I have direct evidence, not just a hunch, that it does
+      noticeably worse outside that set, so a brand-new client's queue should be trusted less until
+      it's been checked separately. Pages under 100 impressions were excluded from the start, so
+      there's no claim here about very low-traffic content in either direction.
+    </p>
+    <p>
+      None of this is causal. I'm not saying that reviewing a flagged page and rewriting its title
+      will raise its CTR by some percentage, because nothing in a single cross-sectional month of
+      data can support a claim like that. What I can say is narrower, and I think still useful: on
+      the data I checked, these particular pages sit further from what similar pages achieve than
+      most do, and that seems worth ten minutes of somebody's attention.
+    </p>
+  </section>
+
+  <section id="recommendations">
+    <h2>Ranked recommendations</h2>
+    <p>
+      The model's predictions turn into an actual queue, not just a sorted list of scores. Every
+      underperforming page gets a reason attached to it: <code>VISIBLE_UNDERPERFORMER</code> if it
+      already ranks well and the gap looks like a click-appeal problem (title, meta description,
+      snippet), <code>RISING_OPPORTUNITY</code> if it's close to page one and hasn't gone stale, or
+      <code>AGING_NEEDS_REFRESH</code> if it's close to page one and hasn't been touched in six
+      months or more.
+    </p>
+    <p>
+      The eligible pool, meaning any underperforming page that isn't buried past page 5, runs to
+      roughly 64,000 pages, which isn't a to-do list for anyone. The queue I'd actually hand someone
+      is 200 pages, and getting to that number took a real correction along the way. My first pass
+      just took the top 200 by potential clicks recovered, and it came back with zero aging-content
+      pages, because that category lives in lower-traffic positions that can never win a pure
+      volume-weighted ranking, no matter how real the issue is. So the final queue reserves slots by
+      reason instead: 100 visible-underperformer pages, 60 rising-opportunity, 40 aging-refresh, each
+      still ranked internally by potential clicks recovered.
+    </p>
+
+    <figure>
+      <img src="figures/queue_composition.png" alt="Stacked bar chart of the 200-page queue by reason code and confidence flag">
+      <figcaption><strong>Takeaway:</strong> without the quota, the aging-refresh category would have shown up zero times in the actual queue, despite being a real, paper-motivated finding.</figcaption>
+    </figure>
+
+    <p>
+      FlyRank's own research found that declining content tends to be older and shorter than growing
+      content. I checked both on this panel instead of just quoting the number. Content age and
+      time since last update both lean the same direction as that finding, with a smaller gap than
+      they reported. Word count didn't hold up as a comparison at all, once I noticed the two groups
+      I was comparing had unevenly missing data, so I'm reporting that one as inconclusive rather
+      than picking whichever direction sounded better.
+    </p>
+
+    <div class="callout no-go">
+      <strong>What this doesn't do, on purpose:</strong> no auto-editing or auto-publishing, no
+      auto-deleting or unpublishing based on a score, no client-facing promises about how much CTR
+      will improve, and no action taken on a new client or content type without a human flagging it
+      as untested first. Every row in the queue still needs a person to read the actual page before
+      anything changes.
+    </div>
+  </section>
+
+  <section id="reproducibility">
+    <h2>Reproducibility</h2>
+    <p>
+      Every number on this page comes from a notebook in the project repo, and every model uses a
+      fixed random seed (42) so the results don't move between runs. The full sequence, in order:
+    </p>
+    <ul class="repro-links">
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/w02_ml_task_framing.ipynb">Task framing</a>, where the lane and metric were locked in</li>
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/w03_data_contract.ipynb">Data contract</a>, the feature list and the first leakage trap</li>
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/w04_baseline_score.ipynb">Baseline rule</a>, the tier &times; content-type average this project set out to beat</li>
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/w05_model.ipynb">Model</a>, the Random Forest, the split design, and the honest comparison table</li>
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/w06_validation_audit.ipynb">Validation audit</a>, the naive-vs-grouped split check and the leakage re-hunt</li>
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/w07_action_playbook.ipynb">Action playbook</a>, where the model became the 200-page queue</li>
+      <li><a href="https://github.com/Abdulm111/ML-Assignement01/blob/main/work/notebooks/capstone.ipynb">Capstone</a>, which pulls all of the above together and regenerates every chart on this page</li>
+    </ul>
+    <p>
+      To rerun any of it: clone <a href="https://github.com/Abdulm111/ML-Assignement01">the repo</a>,
+      open a notebook in Colab, and supply your own Hugging Face token for the
+      <code>FlyRank/internship-warehouse</code> dataset as a Colab secret named
+      <code>HF_TOKEN</code>. Nothing here depends on data that isn't publicly queryable given access
+      to that dataset.
+    </p>
+  </section>
+
+  <footer class="credit" id="acknowledgments">
+    <p>
+      Built on the <strong>FlyRank ML Internship dataset</strong>, part of FlyRank's production
+      search data made available for this program. Full credit and access info at
+      <a href="https://flyrank.ai" target="_blank" rel="noopener">flyrank.ai</a>.
+    </p>
+    <p>
+      This project also learned from and cross-checked its methods against FlyRank's own internal
+      research, <em>The State of AI-Driven SEO</em> (March 2026), which was generous enough to
+      disclose its own methodology in enough detail to actually question it. That's rarer than it
+      should be, and it made this project better.
+    </p>
+  </footer>
+
+</main>
+</body>
+</html>
